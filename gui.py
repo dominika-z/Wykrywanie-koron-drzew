@@ -12,6 +12,9 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtGui import QPixmap, QImage, QColor
 from PyQt5.QtCore import QRectF, QThread, Qt, pyqtSignal
 import numpy as np
+from shapely import Point, Polygon
+import geopandas as gpd
+import os
 
 
 class AnalysisWorker(QThread):
@@ -54,6 +57,7 @@ class AnalysisWorker(QThread):
                 nmt_trans = nmt_file.transform
 
                 for idx, row in predicted.iterrows():
+                    print(f"geometria: {row["geometry"]}")
                     xmin, ymin, xmax, ymax = int(row["xmin"]), int(row["ymin"]), int(row["xmax"]), int(row["ymax"])
                     tree_crop = image_rgb[ymin:ymax, xmin:xmax]
                     
@@ -61,12 +65,23 @@ class AnalysisWorker(QThread):
 
                     local_x = (xmin + xmax) / 2
                     local_y = (ymin + ymax) / 2
-                    world_x, world_y = crop_transform * (local_x, local_y)
+                    world_x, world_y = crop_transform * (local_x, local_y) #układ terenowy
+
+                    score = row["score"]
+
+                    p1 = xy(crop_transform, ymin, xmin, offset='ul')
+                    p2 = xy(crop_transform, ymin, xmax, offset='ur')
+                    p3 = xy(crop_transform, ymax, xmax, offset='lr')
+                    p4 = xy(crop_transform, ymax, xmin, offset='ll')
+
+                    coords = [p1, p2, p3, p4, p1]
+                    # coords = (crop_transform * (ymin,xmin), crop_transform * (ymin,xmax),  crop_transform * (ymax,xmax), crop_transform * (ymax, xmin), crop_transform * (ymin,xmin))
 
                     try:
                         val_nmpt = list(nmpt_file.sample([(world_x, world_y)]))[0][0]
                         val_nmt = list(nmt_file.sample([(world_x, world_y)]))[0][0]
                         height = val_nmpt - val_nmt
+
                     except:
                         print(f"Nie można odczytać wysokości. Ustawiam wysokość na 0.")
                         height = 0
@@ -75,14 +90,38 @@ class AnalysisWorker(QThread):
                         "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
                         "local_x": local_x, "local_y": local_y,
                         "mean_r": mean_r, "mean_g": mean_g, "mean_b": mean_b,
-                        "height": height
+                        "height": height,
+                        "geometryP": Point(float(world_x), float(world_y)),
+                        "geometryA": Polygon(coords),
+                        "score": score
                     })
 
+            #zapis do pliku shp
+            gdfA = gpd.GeoDataFrame(
+                        analysis_data,
+                        geometry="geometryA",
+                        crs=src.crs
+                    )
+            
+            os.makedirs("trees", exist_ok=True)
+            gdfA.to_file(r"trees\trees_A.shp")
+
+            gdfP = gpd.GeoDataFrame(
+            analysis_data,
+            geometry="geometryP",
+            crs=src.crs
+             )
+            
+            gdfP.to_file(r"trees\trees_P.shp")
+
+            
+
             df = pd.DataFrame(analysis_data)
+            #print(df.head)
 
             if not df.empty:
-                global_median_color = df[["mean_r", "mean_g", "mean_b"]].median().values
-                df["color_dist"] = np.linalg.norm(df[["mean_r", "mean_g", "mean_b"]].values - global_median_color, axis=1)
+                global_mean_color = df[["mean_r", "mean_g", "mean_b"]].mean().values
+                df["color_dist"] = np.linalg.norm(df[["mean_r", "mean_g", "mean_b"]].values - global_mean_color, axis=1)
                 clr_threshold = df["color_dist"].mean() + df["color_dist"].std()
 
                 display_img = cv2.cvtColor(image_rgb.astype("uint8"), cv2.COLOR_RGB2BGR)
