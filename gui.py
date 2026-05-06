@@ -16,7 +16,6 @@ from shapely import Point, Polygon
 import geopandas as gpd
 import os
 
-
 class AnalysisWorker(QThread):
     """Wątek roboczy do analizy DeepForest, aby nie blokować interfejsu GUI."""
     log_signal = pyqtSignal(str)
@@ -57,7 +56,7 @@ class AnalysisWorker(QThread):
                 nmt_trans = nmt_file.transform
 
                 for idx, row in predicted.iterrows():
-                    print(f"geometria: {row["geometry"]}")
+                    print(f"geometria: {row['geometry']}")
                     xmin, ymin, xmax, ymax = int(row["xmin"]), int(row["ymin"]), int(row["xmax"]), int(row["ymax"])
                     tree_crop = image_rgb[ymin:ymax, xmin:xmax]
                     
@@ -96,33 +95,39 @@ class AnalysisWorker(QThread):
                         "score": score
                     })
 
-            #zapis do pliku shp
-            gdfA = gpd.GeoDataFrame(
-                        analysis_data,
-                        geometry="geometryA",
-                        crs=src.crs
-                    )
-            
-            os.makedirs("trees", exist_ok=True)
-            gdfA.to_file(r"trees\trees_A.shp")
-
-            gdfP = gpd.GeoDataFrame(
-            analysis_data,
-            geometry="geometryP",
-            crs=src.crs
-             )
-            
-            gdfP.to_file(r"trees\trees_P.shp")
-
-            
-
             df = pd.DataFrame(analysis_data)
             #print(df.head)
 
             if not df.empty:
+                # Analiza koloru i wysokości
                 global_mean_color = df[["mean_r", "mean_g", "mean_b"]].mean().values
                 df["color_dist"] = np.linalg.norm(df[["mean_r", "mean_g", "mean_b"]].values - global_mean_color, axis=1)
                 clr_threshold = df["color_dist"].mean() + df["color_dist"].std()
+
+                # Filtrowanie tylko dobrych drzew
+                good_trees_mask = (df["height"] > 2.0) & (df["color_dist"] <= clr_threshold)
+                good_trees_data = [analysis_data[i] for i in df[good_trees_mask].index]
+
+                # Zapis tylko dobrych drzew do shapefiles
+                os.makedirs("trees", exist_ok=True)
+                
+                if good_trees_data:
+                    gdfA = gpd.GeoDataFrame(
+                        good_trees_data,
+                        geometry="geometryA",
+                        crs=src.crs
+                    )
+                    gdfA.to_file(r"trees\trees_A.shp")
+
+                    gdfP = gpd.GeoDataFrame(
+                        good_trees_data,
+                        geometry="geometryP",
+                        crs=src.crs
+                    )
+                    gdfP.to_file(r"trees\trees_P.shp")
+                    self.log_signal.emit(f"Zapisano {len(good_trees_data)} dobrych drzew.")
+                else:
+                    self.log_signal.emit("Brak dobrych drzew spełniających kryteria.")
 
                 display_img = cv2.cvtColor(image_rgb.astype("uint8"), cv2.COLOR_RGB2BGR)
 
