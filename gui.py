@@ -51,7 +51,7 @@ class AnalysisWorker(QThread):
             self.log_signal.emit(f"Wykryto {len(predicted)} obiektów. Analiza wysokości i koloru...")
             with rasterio.open(self.nmpt) as nmpt_file, \
                  rasterio.open(self.nmt) as nmt_file:
-                
+
                 nmpt_trans = nmpt_file.transform
                 nmt_trans = nmt_file.transform
 
@@ -64,7 +64,7 @@ class AnalysisWorker(QThread):
 
                     local_x = (xmin + xmax) / 2
                     local_y = (ymin + ymax) / 2
-                    world_x, world_y = crop_transform * (local_x, local_y) #układ terenowy
+                    world_x, world_y = crop_transform * (local_x, local_y)
 
                     score = row["score"]
 
@@ -74,7 +74,6 @@ class AnalysisWorker(QThread):
                     p4 = xy(crop_transform, ymax, xmin, offset='ll')
 
                     coords = [p1, p2, p3, p4, p1]
-                    # coords = (crop_transform * (ymin,xmin), crop_transform * (ymin,xmax),  crop_transform * (ymax,xmax), crop_transform * (ymax, xmin), crop_transform * (ymin,xmin))
 
                     try:
                         val_nmpt = list(nmpt_file.sample([(world_x, world_y)]))[0][0]
@@ -96,19 +95,17 @@ class AnalysisWorker(QThread):
                     })
 
             df = pd.DataFrame(analysis_data)
-            #print(df.head)
 
             if not df.empty:
-                # Analiza koloru i wysokości
                 global_mean_color = df[["mean_r", "mean_g", "mean_b"]].mean().values
                 df["color_dist"] = np.linalg.norm(df[["mean_r", "mean_g", "mean_b"]].values - global_mean_color, axis=1)
-                clr_threshold = df["color_dist"].mean() + df["color_dist"].std()
+                median_dist = df["color_dist"].median()
+                mad = np.median(np.abs(df["color_dist"] - median_dist))
+                clr_threshold = median_dist + 2.5 * mad
 
-                # Filtrowanie tylko dobrych drzew
                 good_trees_mask = (df["height"] > 2.0) & (df["color_dist"] <= clr_threshold)
                 good_trees_data = [analysis_data[i] for i in df[good_trees_mask].index]
 
-                # Zapis tylko dobrych drzew do shapefiles
                 os.makedirs("trees", exist_ok=True)
                 
                 if good_trees_data:
@@ -184,7 +181,7 @@ class ImageView(QGraphicsView):
 
         qimg = QImage(img_array.data, w, h, bytes_per_line, QImage.Format_RGB888)
         self._image_ref = img_array 
-       
+
         pixmap = QPixmap.fromImage(qimg)
         self.scene.addPixmap(pixmap)
         self.setSceneRect(QRectF(0, 0, w, h))
@@ -204,7 +201,7 @@ class ImageView(QGraphicsView):
 
     def mouseReleaseEvent(self, event):
         end = self.mapToScene(event.pos())
-        
+
         orig_x1, orig_y1 = self.start.x() * self.scale_factor, self.start.y() * self.scale_factor
         orig_x2, orig_y2 = end.x() * self.scale_factor, end.y() * self.scale_factor
 
@@ -239,7 +236,7 @@ class MainWindow(QMainWindow):
         
         self.btn_nmpt.clicked.connect(lambda: self.set_path('nmpt'))
         self.btn_nmt.clicked.connect(lambda: self.set_path('nmt'))
-        
+
         self.btn_start = QPushButton("Start")
         self.btn_start.clicked.connect(self.start_analysis)
 
@@ -249,12 +246,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.btn_nmt)
         layout.addWidget(self.btn_start)
         layout.addWidget(self.view)
-        
+
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
         self.resize(1000, 800)
-    
+
     def set_path(self, key):
         path, _ = QFileDialog.getOpenFileName(self, f"Wybierz {key.upper()}", "", "Asc (*.asc);;TIFF Files (*.tif *.tiff)")
         if path:
@@ -264,7 +261,7 @@ class MainWindow(QMainWindow):
     def load_image(self):
         path, _ = QFileDialog.getOpenFileName(self, "Wybierz GeoTIFF", "", "TIFF Files (*.tif *.tiff)")
         if not path: return
-        
+
         self.paths["orto"] = path
         print(f"Załadowano ORTO: {path}")
 
@@ -272,7 +269,7 @@ class MainWindow(QMainWindow):
             max_dim = 2000
             scale = max(src.width, src.height) / max_dim
             if scale < 1: scale = 1
-            
+
             new_width = int(src.width / scale)
             new_height = int(src.height / scale)
 
@@ -281,7 +278,7 @@ class MainWindow(QMainWindow):
                 out_shape=(3, new_height, new_width),
                 resampling=rasterio.enums.Resampling.bilinear
             )
-            
+
             img = np.transpose(img, (1, 2, 0))
             img = np.clip(img, 0, 255).astype(np.uint8) 
 
@@ -312,7 +309,7 @@ class MainWindow(QMainWindow):
             width=width,
             height=height
         )
-        
+
         self.worker.log_signal.connect(lambda msg: print(msg))
         self.worker.finished_signal.connect(self.show_results)
         self.worker.start()
